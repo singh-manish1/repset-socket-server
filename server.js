@@ -111,8 +111,9 @@ function validateCloudCommand(payload) {
     switch (payload.action) {
         case COMMAND_TYPES.ENROLL_FINGERPRINT:
             if (!payload.userId) errors.push('Missing "userId" for enrollment');
-            if (payload.fingerprintId && typeof payload.fingerprintId !== 'number') {
-                errors.push('Invalid "fingerprintId" - must be a number');
+            // fingerprintId should NOT be pre-assigned - device generates it
+            if (payload.fingerprintId) {
+                errors.push('Do not pre-assign "fingerprintId" - device will generate it');
             }
             break;
 
@@ -166,12 +167,21 @@ function validateHardwareEvent(payload) {
         errors.push('Missing or invalid "eventId" field');
     }
 
+    if (!payload.timestamp || typeof payload.timestamp !== 'string') {
+        errors.push('Missing or invalid "timestamp" field');
+    }
+
     // Event-specific validation
     switch (payload.type) {
         case EVENT_TYPES.ATTENDANCE:
-        case EVENT_TYPES.VERIFICATION_SUCCESS:
+            // Bridge sends fingerprintId, not userId (server must look up userId)
+            if (!payload.fingerprintId) errors.push('Missing "fingerprintId" for attendance');
+            if (typeof payload.matchScore !== 'number') errors.push('Missing or invalid "matchScore"');
+            break;
+
         case EVENT_TYPES.UNAUTHORIZED_ACCESS:
-            if (!payload.userId) errors.push('Missing "userId" for event');
+            // No userId or fingerprintId - just attemptCount
+            if (typeof payload.attemptCount !== 'number') errors.push('Missing or invalid "attemptCount"');
             break;
 
         case EVENT_TYPES.ENROLLMENT_SUCCESS:
@@ -181,23 +191,75 @@ function validateHardwareEvent(payload) {
             break;
 
         case EVENT_TYPES.ENROLLMENT_FAILED:
-        case EVENT_TYPES.DELETION_FAILED:
-        case EVENT_TYPES.VERIFICATION_FAILED:
             if (!payload.commandId) errors.push('Missing "commandId" for failure response');
+            if (!payload.userId) errors.push('Missing "userId" for enrollment failure');
             if (!payload.error) errors.push('Missing "error" message for failure');
+            if (!payload.errorCode) errors.push('Missing "errorCode" for failure');
             break;
 
         case EVENT_TYPES.DELETION_SUCCESS:
             if (!payload.commandId) errors.push('Missing "commandId" for deletion response');
+            // Either userId or fingerprintId must be present
+            if (!payload.userId && !payload.fingerprintId) {
+                errors.push('Missing "userId" or "fingerprintId" for deletion');
+            }
+            break;
+
+        case EVENT_TYPES.DELETION_FAILED:
+            if (!payload.commandId) errors.push('Missing "commandId" for failure response');
+            if (!payload.error) errors.push('Missing "error" message for failure');
+            if (!payload.errorCode) errors.push('Missing "errorCode" for failure');
+            break;
+
+        case EVENT_TYPES.VERIFICATION_SUCCESS:
+            if (!payload.commandId) errors.push('Missing "commandId" for verification response');
+            if (!payload.userId) errors.push('Missing "userId" for verification');
+            if (typeof payload.matchScore !== 'number') errors.push('Missing or invalid "matchScore"');
+            break;
+
+        case EVENT_TYPES.VERIFICATION_FAILED:
+            if (!payload.commandId) errors.push('Missing "commandId" for failure response');
+            if (!payload.error) errors.push('Missing "error" message for failure');
+            if (!payload.errorCode) errors.push('Missing "errorCode" for failure');
+            break;
+
+        case EVENT_TYPES.DOOR_UNLOCKED:
+            if (!payload.commandId) errors.push('Missing "commandId" for door unlock response');
+            break;
+
+        case EVENT_TYPES.DOOR_LOCKED:
+            // commandId may be null for auto-lock
+            break;
+
+        case EVENT_TYPES.SYNC_COMPLETE:
+            if (!payload.commandId) errors.push('Missing "commandId" for sync response');
+            if (typeof payload.syncedCount !== 'number') errors.push('Missing or invalid "syncedCount"');
+            if (typeof payload.failedCount !== 'number') errors.push('Missing or invalid "failedCount"');
+            break;
+
+        case EVENT_TYPES.DEVICE_STATUS:
+            if (!payload.commandId) errors.push('Missing "commandId" for status response');
+            if (!payload.status || typeof payload.status !== 'object') {
+                errors.push('Missing or invalid "status" object');
+            } else {
+                // Validate status object structure
+                const requiredFields = ['online', 'firmwareVersion', 'enrolledCount', 'capacity', 'doorStatus'];
+                requiredFields.forEach(field => {
+                    if (!(field in payload.status)) {
+                        errors.push(`Missing "${field}" in status object`);
+                    }
+                });
+            }
             break;
 
         case EVENT_TYPES.DEVICE_ERROR:
             if (!payload.error) errors.push('Missing "error" message');
+            if (!payload.errorCode) errors.push('Missing "errorCode"');
+            if (!payload.severity) errors.push('Missing "severity" level');
             break;
 
-        case EVENT_TYPES.DEVICE_STATUS:
-            if (!payload.status) errors.push('Missing "status" object');
-            break;
+        default:
+            errors.push(`Unknown event type: ${payload.type}`);
     }
 
     return { valid: errors.length === 0, errors };
