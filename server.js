@@ -273,35 +273,45 @@ async function logToDatabase(eventData, retries = 3) {
     }
 
     for (let attempt = 1; attempt <= retries; attempt++) {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 5000);
+
         try {
+            console.log(`📤 Sending webhook to: ${WEBHOOK_URL}`);
+            console.log(`📦 Event data:`, JSON.stringify(eventData, null, 2));
+
             const response = await fetch(WEBHOOK_URL, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
+                    'x-webhook-secret': BIOMETRIC_WEBHOOK_SECRET
                 },
-                body: JSON.stringify({
-                    ...eventData,
-                    secret: BIOMETRIC_WEBHOOK_SECRET
-                }),
-                timeout: 5000
+                body: JSON.stringify(eventData),
+                signal: controller.signal
             });
+
+            clearTimeout(timeoutId);
 
             if (!response.ok) {
                 const errorText = await response.text();
                 throw new Error(`HTTP ${response.status}: ${errorText}`);
             }
 
+            const responseData = await response.json();
             console.log(`✅ Event logged to database: ${eventData.type} (Event ID: ${eventData.eventId})`);
+            console.log(`📥 Response:`, responseData);
             return true;
 
         } catch (error) {
+            clearTimeout(timeoutId);
             console.error(`❌ Database logging attempt ${attempt}/${retries} failed:`, error.message);
             
             if (attempt === retries) {
                 console.error(`🚨 CRITICAL: Failed to log event after ${retries} attempts`, {
                     eventId: eventData.eventId,
                     type: eventData.type,
-                    gymId: eventData.gymId
+                    gymId: eventData.gymId,
+                    error: error.message
                 });
                 return false;
             }
